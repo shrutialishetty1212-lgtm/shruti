@@ -1,180 +1,117 @@
-# Terraform AWS EKS Cluster Deployment
-
-This project provisions an Amazon EKS (Elastic Kubernetes Service) cluster and managed node group using Terraform.
-
-## Architecture
-
-- AWS EKS Cluster
-- Managed Node Group
-- Default VPC
-- Default Subnets
-- IAM Roles and Policies
-
-## Prerequisites
-
-Before running this project, ensure you have:
-
-- AWS Account
-- AWS CLI installed and configured
-- Terraform installed (v1.5+ recommended)
-- IAM user with permissions for:
-  - EKS
-  - EC2
-  - IAM
-  - VPC
-
-## Configure AWS Credentials
-
-```bash
-aws configure
+# eks node group
 ```
+provider "aws" {
+  region = "ap-south-1"
+}
 
-Provide:
+# Default VPC
+data "aws_vpc" "default" {
+  default = true
+}
 
-```text
-AWS Access Key ID
-AWS Secret Access Key
-Default Region: ap-south-1
-Output Format: json
+# All subnets in the default VPC
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# EKS Cluster IAM Role
+resource "aws_iam_role" "cluster" {
+  name = "eks-cluster-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "eks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "cluster_policy" {
+  role       = aws_iam_role.cluster.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+}
+
+# EKS Cluster
+resource "aws_eks_cluster" "cluster" {
+  name     = "my-eks-cluster"
+  role_arn = aws_iam_role.cluster.arn
+  version  = "1.31"
+
+  vpc_config {
+    subnet_ids = data.aws_subnets.default.ids
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.cluster_policy
+  ]
+}
+
+# Node Group IAM Role
+resource "aws_iam_role" "node" {
+  name = "eks-nodegroup-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "worker_node_policy" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "cni_policy" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_policy" {
+  role       = aws_iam_role.node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+# Node Group
+resource "aws_eks_node_group" "node_group" {
+  cluster_name    = aws_eks_cluster.cluster.name
+  node_group_name = "my-node-group"
+  node_role_arn   = aws_iam_role.node.arn
+
+  subnet_ids = data.aws_subnets.default.ids
+
+  scaling_config {
+    desired_size = 2
+    min_size     = 1
+    max_size     = 3
+  }
+
+  instance_types = ["t3.medium"]
+
+  depends_on = [
+    aws_iam_role_policy_attachment.worker_node_policy,
+    aws_iam_role_policy_attachment.cni_policy,
+    aws_iam_role_policy_attachment.ecr_policy
+  ]
+}
+
+output "cluster_name" {
+  value = aws_eks_cluster.cluster.name
+}
+
+output "node_group_name" {
+  value = aws_eks_node_group.node_group.node_group_name
+}
 ```
-
-## Project Structure
-
-```text
-.
-├── main.tf
-├── terraform.tfstate
-├── terraform.tfstate.backup
-└── README.md
-```
-
-## Resources Created
-
-### EKS Cluster
-
-- Cluster Name: `my-eks-cluster`
-- Kubernetes Version: `1.33`
-- Uses Default VPC and Subnets
-
-### Node Group
-
-- Node Group Name: `my-node-group`
-- Instance Type: `t3.medium`
-- Desired Nodes: `2`
-- Minimum Nodes: `1`
-- Maximum Nodes: `3`
-
-### IAM Roles
-
-#### Cluster Role
-
-Attached Policy:
-
-- AmazonEKSClusterPolicy
-
-#### Node Group Role
-
-Attached Policies:
-
-- AmazonEKSWorkerNodePolicy
-- AmazonEKS_CNI_Policy
-- AmazonEC2ContainerRegistryReadOnly
-
-## Initialize Terraform
-
-```bash
-terraform init
-```
-
-## Validate Configuration
-
-```bash
-terraform validate
-```
-
-## Preview Changes
-
-```bash
-terraform plan
-```
-
-## Deploy Infrastructure
-
-```bash
-terraform apply -auto-approve
-```
-
-Terraform will create:
-
-- EKS Cluster
-- Node Group
-- IAM Roles
-- Policy Attachments
-
-## Verify Cluster
-
-List clusters:
-
-```bash
-aws eks list-clusters --region ap-south-1
-```
-
-Update kubeconfig:
-
-```bash
-aws eks update-kubeconfig \
---region ap-south-1 \
---name my-eks-cluster
-```
-
-Verify connection:
-
-```bash
-kubectl get nodes
-```
-
-Expected Output:
-
-```text
-NAME                              STATUS   ROLES    AGE   VERSION
-ip-xxx-xxx-xxx-xxx.ec2.internal   Ready    <none>   xxm   v1.33.x
-```
-
-## Outputs
-
-Terraform outputs:
-
-```bash
-terraform output
-```
-
-Example:
-
-```text
-cluster_name = "my-eks-cluster"
-node_group_name = "my-node-group"
-```
-
-## Destroy Infrastructure
-
-To avoid AWS charges:
-
-```bash
-terraform destroy -auto-approve
-```
-
-## Notes
-
-- This project uses the AWS Default VPC.
-- Suitable for learning and testing purposes.
-- For production environments:
-  - Use custom VPCs
-  - Private subnets
-  - Managed security groups
-  - IAM Roles for Service Accounts (IRSA)
-  - Cluster Autoscaler
-  - Monitoring and Logging
-
-## Author
-
-Created using Terraform and AWS EKS.
