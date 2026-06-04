@@ -1,5 +1,3 @@
-# eks node group
-```
 provider "aws" {
   region = "ap-south-1"
 }
@@ -114,4 +112,3 @@ output "cluster_name" {
 output "node_group_name" {
   value = aws_eks_node_group.node_group.node_group_name
 }
-```
